@@ -1766,10 +1766,18 @@ with data_flow_tab:
             st.session_state.components
         )
 
-        st.mermaid_chart(
-            mermaid_definition,
-            height=600,
-        )
+        try:
+            st.mermaid_chart(
+                mermaid_definition,
+                width="stretch",
+            )
+
+        except Exception as error:
+            st.error(
+                "The Mermaid diagram could not be displayed."
+            )
+
+            st.exception(error)
 
         with st.expander(
             "View Mermaid diagram definition"
