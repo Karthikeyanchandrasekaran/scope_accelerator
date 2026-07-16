@@ -213,6 +213,153 @@ def load_workflow(
     st.session_state.environment = environment
     st.session_state.generated_script = ""
 
+from typing import Any
+
+
+def get_dataset_schemas() -> dict[str, list[str]]:
+    """
+    Build a dictionary containing the known columns
+    for every dataset produced by the workflow.
+    """
+    dataset_schemas: dict[str, list[str]] = {}
+
+    for component in st.session_state.components:
+        component_type = component["type"]
+        config = component["config"]
+
+        if component_type == "Read File":
+            dataset_name = config.get(
+                "dataset_name",
+                "",
+            )
+
+            schema = config.get(
+                "schema",
+                [],
+            )
+
+            columns = [
+                column.get("name", "").strip()
+                for column in schema
+                if column.get("name", "").strip()
+            ]
+
+            if dataset_name:
+                dataset_schemas[dataset_name] = columns
+
+        elif component_type == "Select Columns":
+            source_dataset = config.get(
+                "source_dataset",
+                "",
+            )
+
+            output_dataset = config.get(
+                "output_dataset",
+                "",
+            )
+
+            selected_columns = config.get(
+                "columns",
+                [],
+            )
+
+            if output_dataset:
+                dataset_schemas[output_dataset] = (
+                    selected_columns
+                )
+
+        elif component_type == "Filter":
+            source_dataset = config.get(
+                "source_dataset",
+                "",
+            )
+
+            output_dataset = config.get(
+                "output_dataset",
+                "",
+            )
+
+            if output_dataset:
+                dataset_schemas[output_dataset] = list(
+                    dataset_schemas.get(
+                        source_dataset,
+                        [],
+                    )
+                )
+
+        elif component_type == "Join":
+            output_dataset = config.get(
+                "output_dataset",
+                "",
+            )
+
+            selected_columns = config.get(
+                "selected_column_names",
+                [],
+            )
+
+            if output_dataset:
+                dataset_schemas[output_dataset] = (
+                    selected_columns
+                )
+
+        elif component_type == "Aggregate":
+            output_dataset = config.get(
+                "output_dataset",
+                "",
+            )
+
+            group_by_columns = config.get(
+                "group_by_columns",
+                [],
+            )
+
+            aggregate_aliases = config.get(
+                "aggregate_aliases",
+                [],
+            )
+
+            if output_dataset:
+                dataset_schemas[output_dataset] = (
+                    group_by_columns
+                    + aggregate_aliases
+                )
+
+        elif component_type == "Union":
+            left_dataset = config.get(
+                "left_dataset",
+                "",
+            )
+
+            output_dataset = config.get(
+                "output_dataset",
+                "",
+            )
+
+            if output_dataset:
+                dataset_schemas[output_dataset] = list(
+                    dataset_schemas.get(
+                        left_dataset,
+                        [],
+                    )
+                )
+
+    return dataset_schemas
+
+
+def get_dataset_columns(
+    dataset_name: str,
+) -> list[str]:
+    """
+    Return known columns for one dataset.
+    """
+    schemas = get_dataset_schemas()
+
+    return schemas.get(
+        dataset_name,
+        [],
+    )
+
     return (
         True,
         f"Loaded {len(restored)} components.",
