@@ -145,9 +145,10 @@ def render_join(
     config: dict[str, Any],
 ) -> str:
     left_source = render_join_source(
-        source_type=config[
-            "left_source_type"
-        ],
+        source_type=config.get(
+            "left_source_type",
+            "Dataset",
+        ),
         dataset_name=config.get(
             "left_dataset",
             "",
@@ -163,9 +164,10 @@ def render_join(
     )
 
     right_source = render_join_source(
-        source_type=config[
-            "right_source_type"
-        ],
+        source_type=config.get(
+            "right_source_type",
+            "Dataset",
+        ),
         dataset_name=config.get(
             "right_dataset",
             "",
@@ -180,56 +182,62 @@ def render_join(
         ),
     )
 
-    selected_columns = (
-        config.get("selected_columns", "").strip()
-        or "*"
+    selected_columns = config.get(
+        "selected_columns",
+        [],
     )
 
-    selected_lines = [
-        line.strip()
-        for line in selected_columns.splitlines()
-        if line.strip()
-    ]
+    if isinstance(selected_columns, str):
+        selected_columns = [
+            value.strip()
+            for value in selected_columns.replace(
+                "\n",
+                ",",
+            ).split(",")
+            if value.strip()
+        ]
 
-    if len(selected_lines) == 1:
-        select_section = (
-            f"    SELECT {selected_lines[0]}"
-        )
+    if not selected_columns:
+        select_section = "    SELECT *"
+
     else:
-        formatted_lines = []
+        selected_lines: list[str] = []
 
-        for index, line in enumerate(
-            selected_lines
+        for index, column in enumerate(
+            selected_columns
         ):
-            clean_line = line.rstrip(",")
-
             comma = (
                 ","
-                if index < len(selected_lines) - 1
+                if index
+                < len(selected_columns) - 1
                 else ""
             )
 
-            formatted_lines.append(
-                f"        {clean_line}{comma}"
+            selected_lines.append(
+                f"        {column}{comma}"
             )
 
         select_section = "\n".join(
             [
                 "    SELECT",
-                *formatted_lines,
+                *selected_lines,
             ]
         )
-
-    join_type = config["join_type"]
 
     return "\n".join(
         [
             f"{config['output_dataset']} =",
             select_section,
             f"    FROM {left_source}",
-            f"         {join_type} JOIN",
+            (
+                f"         "
+                f"{config['join_type']} JOIN"
+            ),
             f"         {right_source}",
-            f"    ON {config['join_condition']};",
+            (
+                f"    ON "
+                f"{config['join_condition']};"
+            ),
         ]
     )
 
