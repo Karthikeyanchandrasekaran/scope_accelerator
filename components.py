@@ -85,27 +85,26 @@ DEFAULT_CONFIGS: dict[str, dict[str, Any]] = {
         "condition": "UsageCount > 0",
     },
     "Join": {
-        "left_source_type": "Dataset",
-        "left_dataset": "customer_data",
-        "left_subquery": "",
-        "left_alias": "left_data",
+    "left_source_type": "Dataset",
+    "left_dataset": "customer_data",
+    "left_subquery": "",
+    "left_alias": "left_data",
 
-        "right_source_type": "Dataset",
-        "right_dataset": "product_data",
-        "right_subquery": "",
-        "right_alias": "right_data",
+    "right_source_type": "Dataset",
+    "right_dataset": "product_data",
+    "right_subquery": "",
+    "right_alias": "right_data",
 
-        "join_type": "INNER",
-        "join_condition": (
-            "left_data.ProductId == "
-            "right_data.ProductId"
-        ),
-        "selected_columns": (
-            "left_data.CustomerId,\n"
-            "left_data.ProductId,\n"
-            "right_data.ProductName"
-        ),
-        "output_dataset": "joined_data",
+    "join_type": "INNER",
+    "join_condition": (
+        "left_data.ProductId == "
+        "right_data.ProductId"
+    ),
+
+    "selected_columns": [],
+    "selected_column_names": [],
+
+    "output_dataset": "joined_data",
     },
     "Aggregate": {
         "source_dataset": "source_data",
