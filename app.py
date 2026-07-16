@@ -888,9 +888,610 @@ def render_component_editor(
                 )
 
                 st.rerun()
+def escape_mermaid_text(value: str) -> str:
+    """
+    Clean text before using it inside Mermaid labels.
+    """
+    return (
+        str(value)
+        .replace('"', "'")
+        .replace("\n", " ")
+        .replace("[", "(")
+        .replace("]", ")")
+        .replace("{", "(")
+        .replace("}", ")")
+    )
 
+
+def generate_data_flow_mermaid(
+    components: list[dict[str, Any]],
+) -> str:
+    """
+    Generate a Mermaid data-flow diagram from workflow metadata.
+    """
+    if not components:
+        return """
+flowchart LR
+    empty["No workflow components configured"]
+"""
+
+    lines: list[str] = ["flowchart LR"]
+
+    # Keeps track of which component produced each dataset.
+    dataset_producers: dict[str, str] = {}
+
+    # Variable nodes are connected to the first processing step.
+    declaration_nodes: list[str] = []
+
+    # Used for styling.
+    read_nodes: list[str] = []
+    transform_nodes: list[str] = []
+    join_nodes: list[str] = []
+    write_nodes: list[str] = []
+    missing_nodes: list[str] = []
+
+    for index, component in enumerate(
+        components,
+        start=1,
+    ):
+        component_id = component.get("id", index)
+        component_type = component.get("type", "Unknown")
+        config = component.get("config", {})
+
+        node_id = f"step_{component_id}"
+
+        if component_type == "Declare Variable":
+            variable_name = escape_mermaid_text(
+                config.get("variable_name", "Variable")
+            )
+
+            variable_value = escape_mermaid_text(
+                config.get("variable_value", "")
+            )
+
+            lines.append(
+                f'    {node_id}["Declare Variable<br/>'
+                f'{variable_name} = {variable_value}"]'
+            )
+
+            declaration_nodes.append(node_id)
+            transform_nodes.append(node_id)
+
+        elif component_type == "Read File":
+            dataset_name = config.get(
+                "dataset_name",
+                "dataset",
+            )
+
+            input_path = escape_mermaid_text(
+                config.get("input_path", "")
+            )
+
+            lines.append(
+                f'    {node_id}[("Read File<br/>'
+                f'{escape_mermaid_text(dataset_name)}<br/>'
+                f'{input_path}")]'
+            )
+
+            if dataset_name:
+                dataset_producers[dataset_name] = node_id
+
+            read_nodes.append(node_id)
+
+        elif component_type == "Select Columns":
+            source_dataset = config.get(
+                "source_dataset",
+                "",
+            )
+
+            output_dataset = config.get(
+                "output_dataset",
+                "",
+            )
+
+            selected_columns = config.get(
+                "columns",
+                [],
+            )
+
+            lines.append(
+                f'    {node_id}["Select Columns<br/>'
+                f'{escape_mermaid_text(output_dataset)}<br/>'
+                f'{len(selected_columns)} columns"]'
+            )
+
+            source_node = dataset_producers.get(
+                source_dataset
+            )
+
+            if source_node:
+                lines.append(
+                    f"    {source_node} --> "
+                    f"|{escape_mermaid_text(source_dataset)}| "
+                    f"{node_id}"
+                )
+            else:
+                missing_id = f"missing_select_{component_id}"
+
+                lines.append(
+                    f'    {missing_id}["Missing dataset<br/>'
+                    f'{escape_mermaid_text(source_dataset)}"]'
+                )
+
+                lines.append(
+                    f"    {missing_id} -.-> {node_id}"
+                )
+
+                missing_nodes.append(missing_id)
+
+            if output_dataset:
+                dataset_producers[output_dataset] = node_id
+
+            transform_nodes.append(node_id)
+
+        elif component_type == "Filter":
+            source_dataset = config.get(
+                "source_dataset",
+                "",
+            )
+
+            output_dataset = config.get(
+                "output_dataset",
+                "",
+            )
+
+            condition = escape_mermaid_text(
+                config.get("condition", "")
+            )
+
+            if len(condition) > 55:
+                condition = condition[:52] + "..."
+
+            lines.append(
+                f'    {node_id}{{"Filter<br/>'
+                f'{escape_mermaid_text(output_dataset)}<br/>'
+                f'{condition}"}}'
+            )
+
+            source_node = dataset_producers.get(
+                source_dataset
+            )
+
+            if source_node:
+                lines.append(
+                    f"    {source_node} --> "
+                    f"|{escape_mermaid_text(source_dataset)}| "
+                    f"{node_id}"
+                )
+            else:
+                missing_id = f"missing_filter_{component_id}"
+
+                lines.append(
+                    f'    {missing_id}["Missing dataset<br/>'
+                    f'{escape_mermaid_text(source_dataset)}"]'
+                )
+
+                lines.append(
+                    f"    {missing_id} -.-> {node_id}"
+                )
+
+                missing_nodes.append(missing_id)
+
+            if output_dataset:
+                dataset_producers[output_dataset] = node_id
+
+            transform_nodes.append(node_id)
+
+        elif component_type == "Join":
+            output_dataset = config.get(
+                "output_dataset",
+                "",
+            )
+
+            join_type = escape_mermaid_text(
+                config.get("join_type", "JOIN")
+            )
+
+            lines.append(
+                f'    {node_id}{{"{join_type} Join<br/>'
+                f'{escape_mermaid_text(output_dataset)}"}}'
+            )
+
+            left_source_type = config.get(
+                "left_source_type",
+                "Dataset",
+            )
+
+            right_source_type = config.get(
+                "right_source_type",
+                "Dataset",
+            )
+
+            # Left side
+            if left_source_type == "Dataset":
+                left_dataset = config.get(
+                    "left_dataset",
+                    "",
+                )
+
+                left_node = dataset_producers.get(
+                    left_dataset
+                )
+
+                if left_node:
+                    lines.append(
+                        f"    {left_node} --> "
+                        f"|Left: "
+                        f"{escape_mermaid_text(left_dataset)}| "
+                        f"{node_id}"
+                    )
+                else:
+                    missing_left_id = (
+                        f"missing_left_{component_id}"
+                    )
+
+                    lines.append(
+                        f'    {missing_left_id}'
+                        f'["Missing left dataset<br/>'
+                        f'{escape_mermaid_text(left_dataset)}"]'
+                    )
+
+                    lines.append(
+                        f"    {missing_left_id} -.-> {node_id}"
+                    )
+
+                    missing_nodes.append(
+                        missing_left_id
+                    )
+
+            else:
+                left_subquery_id = (
+                    f"left_subquery_{component_id}"
+                )
+
+                left_alias = escape_mermaid_text(
+                    config.get(
+                        "left_alias",
+                        "left_subquery",
+                    )
+                )
+
+                lines.append(
+                    f'    {left_subquery_id}'
+                    f'["Left Subquery<br/>{left_alias}"]'
+                )
+
+                lines.append(
+                    f"    {left_subquery_id} --> "
+                    f"|Subquery| {node_id}"
+                )
+
+                transform_nodes.append(
+                    left_subquery_id
+                )
+
+            # Right side
+            if right_source_type == "Dataset":
+                right_dataset = config.get(
+                    "right_dataset",
+                    "",
+                )
+
+                right_node = dataset_producers.get(
+                    right_dataset
+                )
+
+                if right_node:
+                    lines.append(
+                        f"    {right_node} --> "
+                        f"|Right: "
+                        f"{escape_mermaid_text(right_dataset)}| "
+                        f"{node_id}"
+                    )
+                else:
+                    missing_right_id = (
+                        f"missing_right_{component_id}"
+                    )
+
+                    lines.append(
+                        f'    {missing_right_id}'
+                        f'["Missing right dataset<br/>'
+                        f'{escape_mermaid_text(right_dataset)}"]'
+                    )
+
+                    lines.append(
+                        f"    {missing_right_id} -.-> {node_id}"
+                    )
+
+                    missing_nodes.append(
+                        missing_right_id
+                    )
+
+            else:
+                right_subquery_id = (
+                    f"right_subquery_{component_id}"
+                )
+
+                right_alias = escape_mermaid_text(
+                    config.get(
+                        "right_alias",
+                        "right_subquery",
+                    )
+                )
+
+                lines.append(
+                    f'    {right_subquery_id}'
+                    f'["Right Subquery<br/>{right_alias}"]'
+                )
+
+                lines.append(
+                    f"    {right_subquery_id} --> "
+                    f"|Subquery| {node_id}"
+                )
+
+                transform_nodes.append(
+                    right_subquery_id
+                )
+
+            if output_dataset:
+                dataset_producers[output_dataset] = node_id
+
+            join_nodes.append(node_id)
+
+        elif component_type == "Aggregate":
+            source_dataset = config.get(
+                "source_dataset",
+                "",
+            )
+
+            output_dataset = config.get(
+                "output_dataset",
+                "",
+            )
+
+            group_by_columns = config.get(
+                "group_by_columns",
+                [],
+            )
+
+            lines.append(
+                f'    {node_id}["Aggregate<br/>'
+                f'{escape_mermaid_text(output_dataset)}<br/>'
+                f'{len(group_by_columns)} group keys"]'
+            )
+
+            source_node = dataset_producers.get(
+                source_dataset
+            )
+
+            if source_node:
+                lines.append(
+                    f"    {source_node} --> "
+                    f"|{escape_mermaid_text(source_dataset)}| "
+                    f"{node_id}"
+                )
+            else:
+                missing_id = (
+                    f"missing_aggregate_{component_id}"
+                )
+
+                lines.append(
+                    f'    {missing_id}["Missing dataset<br/>'
+                    f'{escape_mermaid_text(source_dataset)}"]'
+                )
+
+                lines.append(
+                    f"    {missing_id} -.-> {node_id}"
+                )
+
+                missing_nodes.append(missing_id)
+
+            if output_dataset:
+                dataset_producers[output_dataset] = node_id
+
+            transform_nodes.append(node_id)
+
+        elif component_type == "Union":
+            left_dataset = config.get(
+                "left_dataset",
+                "",
+            )
+
+            right_dataset = config.get(
+                "right_dataset",
+                "",
+            )
+
+            output_dataset = config.get(
+                "output_dataset",
+                "",
+            )
+
+            union_type = (
+                "UNION ALL"
+                if config.get("union_all", True)
+                else "UNION"
+            )
+
+            lines.append(
+                f'    {node_id}{{"{union_type}<br/>'
+                f'{escape_mermaid_text(output_dataset)}"}}'
+            )
+
+            left_node = dataset_producers.get(
+                left_dataset
+            )
+
+            right_node = dataset_producers.get(
+                right_dataset
+            )
+
+            if left_node:
+                lines.append(
+                    f"    {left_node} --> "
+                    f"|{escape_mermaid_text(left_dataset)}| "
+                    f"{node_id}"
+                )
+
+            if right_node:
+                lines.append(
+                    f"    {right_node} --> "
+                    f"|{escape_mermaid_text(right_dataset)}| "
+                    f"{node_id}"
+                )
+
+            if output_dataset:
+                dataset_producers[output_dataset] = node_id
+
+            transform_nodes.append(node_id)
+
+        elif component_type == "Custom Code":
+            block_name = escape_mermaid_text(
+                config.get(
+                    "block_name",
+                    "Custom Code",
+                )
+            )
+
+            lines.append(
+                f'    {node_id}["Custom Code<br/>'
+                f'{block_name}"]'
+            )
+
+            if index > 1:
+                previous_component = components[index - 2]
+                previous_id = previous_component.get(
+                    "id",
+                    index - 1,
+                )
+
+                lines.append(
+                    f"    step_{previous_id} -.-> "
+                    f"|Custom dependency| {node_id}"
+                )
+
+            transform_nodes.append(node_id)
+
+        elif component_type == "Write File":
+            source_dataset = config.get(
+                "source_dataset",
+                "",
+            )
+
+            output_path = escape_mermaid_text(
+                config.get("output_path", "")
+            )
+
+            lines.append(
+                f'    {node_id}[("Write File<br/>'
+                f'{escape_mermaid_text(source_dataset)}<br/>'
+                f'{output_path}")]'
+            )
+
+            source_node = dataset_producers.get(
+                source_dataset
+            )
+
+            if source_node:
+                lines.append(
+                    f"    {source_node} --> "
+                    f"|{escape_mermaid_text(source_dataset)}| "
+                    f"{node_id}"
+                )
+            else:
+                missing_id = (
+                    f"missing_write_{component_id}"
+                )
+
+                lines.append(
+                    f'    {missing_id}["Missing dataset<br/>'
+                    f'{escape_mermaid_text(source_dataset)}"]'
+                )
+
+                lines.append(
+                    f"    {missing_id} -.-> {node_id}"
+                )
+
+                missing_nodes.append(missing_id)
+
+            write_nodes.append(node_id)
+
+    # Connect variables to first non-variable component.
+    first_processing_node = None
+
+    for index, component in enumerate(
+        components,
+        start=1,
+    ):
+        if component.get("type") != "Declare Variable":
+            first_processing_node = (
+                f"step_{component.get('id', index)}"
+            )
+            break
+
+    if first_processing_node:
+        for declaration_node in declaration_nodes:
+            lines.append(
+                f"    {declaration_node} -.-> "
+                f"|Parameter| {first_processing_node}"
+            )
+
+    # Mermaid styles.
+    lines.extend(
+        [
+            "",
+            "    classDef readNode "
+            "fill:#e8f1ff,stroke:#4f81bd,stroke-width:1px;",
+            "    classDef transformNode "
+            "fill:#f3f4f6,stroke:#6b7280,stroke-width:1px;",
+            "    classDef joinNode "
+            "fill:#fff7e6,stroke:#d97706,stroke-width:2px;",
+            "    classDef writeNode "
+            "fill:#eaf7ee,stroke:#2e8b57,stroke-width:1px;",
+            "    classDef missingNode "
+            "fill:#fdecec,stroke:#c0392b,stroke-width:2px;",
+        ]
+    )
+
+    if read_nodes:
+        lines.append(
+            "    class "
+            + ",".join(read_nodes)
+            + " readNode;"
+        )
+
+    if transform_nodes:
+        lines.append(
+            "    class "
+            + ",".join(transform_nodes)
+            + " transformNode;"
+        )
+
+    if join_nodes:
+        lines.append(
+            "    class "
+            + ",".join(join_nodes)
+            + " joinNode;"
+        )
+
+    if write_nodes:
+        lines.append(
+            "    class "
+            + ",".join(write_nodes)
+            + " writeNode;"
+        )
+
+    if missing_nodes:
+        lines.append(
+            "    class "
+            + ",".join(missing_nodes)
+            + " missingNode;"
+        )
+
+    return "\n".join(lines)
 
 with st.sidebar:
+    
     st.title("SCOPE Studio")
 
     selected_template = st.selectbox(
@@ -1027,9 +1628,10 @@ with environment_column:
     )
 
 
-workflow_tab, script_tab, json_tab = st.tabs(
+workflow_tab, data_flow_tab, script_tab, json_tab = st.tabs(
     [
         "Workflow",
+        "Data Flow",
         "Generated SCOPE",
         "Workflow JSON",
     ]
@@ -1145,7 +1747,52 @@ with workflow_tab:
 
         st.success("Script generated.")
 
+with data_flow_tab:
+    st.subheader("Workflow Data Flow")
 
+    st.caption(
+        "The diagram is generated automatically from "
+        "workflow components and dataset dependencies."
+    )
+
+    if not st.session_state.components:
+        st.info(
+            "Load a template or add workflow components "
+            "to generate the data-flow diagram."
+        )
+
+    else:
+        mermaid_definition = generate_data_flow_mermaid(
+            st.session_state.components
+        )
+
+        st.mermaid_chart(
+            mermaid_definition,
+            height=600,
+        )
+
+        with st.expander(
+            "View Mermaid diagram definition"
+        ):
+            st.code(
+                mermaid_definition,
+                language="text",
+            )
+
+        diagram_filename = sanitize_filename(
+            st.session_state.job_name
+        )
+
+        st.download_button(
+            label="Download data-flow definition",
+            data=mermaid_definition,
+            file_name=(
+                f"{diagram_filename}_data_flow.mmd"
+            ),
+            mime="text/plain",
+            use_container_width=True,
+        )
+        
 with script_tab:
     if st.session_state.generated_script:
         st.code(
