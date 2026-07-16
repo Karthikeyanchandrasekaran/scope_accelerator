@@ -1490,6 +1490,556 @@ flowchart LR
 
     return "\n".join(lines)
 
+def build_dataset_lineage(
+    components: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """
+    Build dataset-level lineage from workflow components.
+
+    Each lineage record contains:
+    - producing component
+    - source datasets
+    - consuming components
+    - known schema
+    - input/output path
+    """
+    lineage: dict[str, dict[str, Any]] = {}
+
+    def ensure_dataset(dataset_name: str) -> None:
+        if not dataset_name:
+            return
+
+        if dataset_name not in lineage:
+            lineage[dataset_name] = {
+                "dataset_name": dataset_name,
+                "producer_type": "",
+                "producer_step": None,
+                "producer_label": "",
+                "source_datasets": [],
+                "consumers": [],
+                "schema": [],
+                "input_path": "",
+                "output_paths": [],
+            }
+
+    for step_number, component in enumerate(
+        components,
+        start=1,
+    ):
+        component_type = component.get(
+            "type",
+            "Unknown",
+        )
+
+        config = component.get(
+            "config",
+            {},
+        )
+
+        component_id = component.get(
+            "id",
+            step_number,
+        )
+
+        component_label = (
+            f"Step {step_number}: {component_type}"
+        )
+
+        if component_type == "Read File":
+            dataset_name = config.get(
+                "dataset_name",
+                "",
+            ).strip()
+
+            ensure_dataset(dataset_name)
+
+            if dataset_name:
+                lineage[dataset_name].update(
+                    {
+                        "producer_type": "Read File",
+                        "producer_step": step_number,
+                        "producer_id": component_id,
+                        "producer_label": component_label,
+                        "source_datasets": [],
+                        "schema": [
+                            {
+                                "name": column.get(
+                                    "name",
+                                    "",
+                                ),
+                                "type": column.get(
+                                    "type",
+                                    "",
+                                ),
+                            }
+                            for column in config.get(
+                                "schema",
+                                [],
+                            )
+                            if column.get("name")
+                        ],
+                        "input_path": config.get(
+                            "input_path",
+                            "",
+                        ),
+                    }
+                )
+
+        elif component_type == "Select Columns":
+            source_dataset = config.get(
+                "source_dataset",
+                "",
+            ).strip()
+
+            output_dataset = config.get(
+                "output_dataset",
+                "",
+            ).strip()
+
+            ensure_dataset(source_dataset)
+            ensure_dataset(output_dataset)
+
+            if source_dataset:
+                lineage[source_dataset]["consumers"].append(
+                    {
+                        "step": step_number,
+                        "component_id": component_id,
+                        "component_type": component_type,
+                        "output_dataset": output_dataset,
+                    }
+                )
+
+            source_schema = lineage.get(
+                source_dataset,
+                {},
+            ).get("schema", [])
+
+            selected_columns = config.get(
+                "columns",
+                [],
+            )
+
+            selected_schema = [
+                column
+                for column in source_schema
+                if column.get("name")
+                in selected_columns
+            ]
+
+            if output_dataset:
+                lineage[output_dataset].update(
+                    {
+                        "producer_type": component_type,
+                        "producer_step": step_number,
+                        "producer_id": component_id,
+                        "producer_label": component_label,
+                        "source_datasets": [
+                            source_dataset
+                        ],
+                        "schema": selected_schema,
+                    }
+                )
+
+        elif component_type == "Filter":
+            source_dataset = config.get(
+                "source_dataset",
+                "",
+            ).strip()
+
+            output_dataset = config.get(
+                "output_dataset",
+                "",
+            ).strip()
+
+            ensure_dataset(source_dataset)
+            ensure_dataset(output_dataset)
+
+            if source_dataset:
+                lineage[source_dataset]["consumers"].append(
+                    {
+                        "step": step_number,
+                        "component_id": component_id,
+                        "component_type": component_type,
+                        "output_dataset": output_dataset,
+                    }
+                )
+
+            if output_dataset:
+                lineage[output_dataset].update(
+                    {
+                        "producer_type": component_type,
+                        "producer_step": step_number,
+                        "producer_id": component_id,
+                        "producer_label": component_label,
+                        "source_datasets": [
+                            source_dataset
+                        ],
+                        "schema": list(
+                            lineage.get(
+                                source_dataset,
+                                {},
+                            ).get("schema", [])
+                        ),
+                    }
+                )
+
+        elif component_type == "Join":
+            output_dataset = config.get(
+                "output_dataset",
+                "",
+            ).strip()
+
+            source_datasets: list[str] = []
+
+            left_source_type = config.get(
+                "left_source_type",
+                "Dataset",
+            )
+
+            right_source_type = config.get(
+                "right_source_type",
+                "Dataset",
+            )
+
+            if left_source_type == "Dataset":
+                left_dataset = config.get(
+                    "left_dataset",
+                    "",
+                ).strip()
+
+                if left_dataset:
+                    source_datasets.append(
+                        left_dataset
+                    )
+                    ensure_dataset(left_dataset)
+
+                    lineage[left_dataset][
+                        "consumers"
+                    ].append(
+                        {
+                            "step": step_number,
+                            "component_id": component_id,
+                            "component_type": component_type,
+                            "side": "Left",
+                            "output_dataset": output_dataset,
+                        }
+                    )
+
+            else:
+                left_dataset = (
+                    f"Subquery: "
+                    f"{config.get('left_alias', 'left')}"
+                )
+
+                source_datasets.append(
+                    left_dataset
+                )
+
+                ensure_dataset(left_dataset)
+
+                lineage[left_dataset].update(
+                    {
+                        "producer_type": "Subquery",
+                        "producer_step": step_number,
+                        "producer_id": component_id,
+                        "producer_label": (
+                            f"{component_label} left subquery"
+                        ),
+                        "schema": [
+                            {
+                                "name": column,
+                                "type": "Unknown",
+                            }
+                            for column in config.get(
+                                "left_subquery_columns",
+                                [],
+                            )
+                        ],
+                    }
+                )
+
+                lineage[left_dataset][
+                    "consumers"
+                ].append(
+                    {
+                        "step": step_number,
+                        "component_id": component_id,
+                        "component_type": component_type,
+                        "side": "Left",
+                        "output_dataset": output_dataset,
+                    }
+                )
+
+            if right_source_type == "Dataset":
+                right_dataset = config.get(
+                    "right_dataset",
+                    "",
+                ).strip()
+
+                if right_dataset:
+                    source_datasets.append(
+                        right_dataset
+                    )
+                    ensure_dataset(right_dataset)
+
+                    lineage[right_dataset][
+                        "consumers"
+                    ].append(
+                        {
+                            "step": step_number,
+                            "component_id": component_id,
+                            "component_type": component_type,
+                            "side": "Right",
+                            "output_dataset": output_dataset,
+                        }
+                    )
+
+            else:
+                right_dataset = (
+                    f"Subquery: "
+                    f"{config.get('right_alias', 'right')}"
+                )
+
+                source_datasets.append(
+                    right_dataset
+                )
+
+                ensure_dataset(right_dataset)
+
+                lineage[right_dataset].update(
+                    {
+                        "producer_type": "Subquery",
+                        "producer_step": step_number,
+                        "producer_id": component_id,
+                        "producer_label": (
+                            f"{component_label} right subquery"
+                        ),
+                        "schema": [
+                            {
+                                "name": column,
+                                "type": "Unknown",
+                            }
+                            for column in config.get(
+                                "right_subquery_columns",
+                                [],
+                            )
+                        ],
+                    }
+                )
+
+                lineage[right_dataset][
+                    "consumers"
+                ].append(
+                    {
+                        "step": step_number,
+                        "component_id": component_id,
+                        "component_type": component_type,
+                        "side": "Right",
+                        "output_dataset": output_dataset,
+                    }
+                )
+
+            ensure_dataset(output_dataset)
+
+            selected_column_names = config.get(
+                "selected_column_names",
+                [],
+            )
+
+            output_schema = [
+                {
+                    "name": column,
+                    "type": "Unknown",
+                }
+                for column in selected_column_names
+            ]
+
+            if output_dataset:
+                lineage[output_dataset].update(
+                    {
+                        "producer_type": component_type,
+                        "producer_step": step_number,
+                        "producer_id": component_id,
+                        "producer_label": component_label,
+                        "source_datasets": source_datasets,
+                        "schema": output_schema,
+                    }
+                )
+
+        elif component_type == "Aggregate":
+            source_dataset = config.get(
+                "source_dataset",
+                "",
+            ).strip()
+
+            output_dataset = config.get(
+                "output_dataset",
+                "",
+            ).strip()
+
+            ensure_dataset(source_dataset)
+            ensure_dataset(output_dataset)
+
+            if source_dataset:
+                lineage[source_dataset]["consumers"].append(
+                    {
+                        "step": step_number,
+                        "component_id": component_id,
+                        "component_type": component_type,
+                        "output_dataset": output_dataset,
+                    }
+                )
+
+            group_by_columns = config.get(
+                "group_by_columns",
+                [],
+            )
+
+            aggregate_expressions = config.get(
+                "aggregate_expressions",
+                [],
+            )
+
+            aggregate_columns: list[dict[str, str]] = []
+
+            for expression in aggregate_expressions:
+                upper_expression = expression.upper()
+
+                if " AS " in upper_expression:
+                    alias_position = (
+                        upper_expression.rfind(
+                            " AS "
+                        )
+                    )
+
+                    alias = expression[
+                        alias_position + 4:
+                    ].strip()
+                else:
+                    alias = expression.strip()
+
+                aggregate_columns.append(
+                    {
+                        "name": alias,
+                        "type": "Derived",
+                    }
+                )
+
+            group_schema = [
+                column
+                for column in lineage.get(
+                    source_dataset,
+                    {},
+                ).get("schema", [])
+                if column.get("name")
+                in group_by_columns
+            ]
+
+            if output_dataset:
+                lineage[output_dataset].update(
+                    {
+                        "producer_type": component_type,
+                        "producer_step": step_number,
+                        "producer_id": component_id,
+                        "producer_label": component_label,
+                        "source_datasets": [
+                            source_dataset
+                        ],
+                        "schema": (
+                            group_schema
+                            + aggregate_columns
+                        ),
+                    }
+                )
+
+        elif component_type == "Union":
+            left_dataset = config.get(
+                "left_dataset",
+                "",
+            ).strip()
+
+            right_dataset = config.get(
+                "right_dataset",
+                "",
+            ).strip()
+
+            output_dataset = config.get(
+                "output_dataset",
+                "",
+            ).strip()
+
+            ensure_dataset(left_dataset)
+            ensure_dataset(right_dataset)
+            ensure_dataset(output_dataset)
+
+            for source_dataset in [
+                left_dataset,
+                right_dataset,
+            ]:
+                if source_dataset:
+                    lineage[source_dataset][
+                        "consumers"
+                    ].append(
+                        {
+                            "step": step_number,
+                            "component_id": component_id,
+                            "component_type": component_type,
+                            "output_dataset": output_dataset,
+                        }
+                    )
+
+            if output_dataset:
+                lineage[output_dataset].update(
+                    {
+                        "producer_type": component_type,
+                        "producer_step": step_number,
+                        "producer_id": component_id,
+                        "producer_label": component_label,
+                        "source_datasets": [
+                            left_dataset,
+                            right_dataset,
+                        ],
+                        "schema": list(
+                            lineage.get(
+                                left_dataset,
+                                {},
+                            ).get("schema", [])
+                        ),
+                    }
+                )
+
+        elif component_type == "Write File":
+            source_dataset = config.get(
+                "source_dataset",
+                "",
+            ).strip()
+
+            ensure_dataset(source_dataset)
+
+            if source_dataset:
+                lineage[source_dataset]["consumers"].append(
+                    {
+                        "step": step_number,
+                        "component_id": component_id,
+                        "component_type": component_type,
+                        "output_path": config.get(
+                            "output_path",
+                            "",
+                        ),
+                    }
+                )
+
+                output_path = config.get(
+                    "output_path",
+                    "",
+                )
+
+                if output_path:
+                    lineage[source_dataset][
+                        "output_paths"
+                    ].append(output_path)
+
+    return lineage
 with st.sidebar:
     
     st.title("SCOPE Studio")
@@ -1628,10 +2178,17 @@ with environment_column:
     )
 
 
-workflow_tab, data_flow_tab, script_tab, json_tab = st.tabs(
+(
+    workflow_tab,
+    data_flow_tab,
+    lineage_tab,
+    script_tab,
+    json_tab,
+) = st.tabs(
     [
         "Workflow",
         "Data Flow",
+        "Dataset Lineage",
         "Generated SCOPE",
         "Workflow JSON",
     ]
@@ -1800,7 +2357,339 @@ with data_flow_tab:
             mime="text/plain",
             use_container_width=True,
         )
-        
+with lineage_tab:
+    st.subheader("Dataset Lineage")
+
+    st.caption(
+        "Explore which components create and consume "
+        "each dataset in the workflow."
+    )
+
+    if not st.session_state.components:
+        st.info(
+            "Load a template or add workflow components "
+            "to generate dataset lineage."
+        )
+
+    else:
+        dataset_lineage = build_dataset_lineage(
+            st.session_state.components
+        )
+
+        dataset_names = sorted(
+            dataset_lineage.keys()
+        )
+
+        if not dataset_names:
+            st.info(
+                "No datasets were found in the workflow."
+            )
+
+        else:
+            total_datasets = len(dataset_names)
+
+            source_datasets = sum(
+                1
+                for dataset in dataset_lineage.values()
+                if dataset.get("producer_type")
+                in {"Read File", "Subquery"}
+            )
+
+            transformed_datasets = sum(
+                1
+                for dataset in dataset_lineage.values()
+                if dataset.get("producer_type")
+                in {
+                    "Select Columns",
+                    "Filter",
+                    "Join",
+                    "Aggregate",
+                    "Union",
+                }
+            )
+
+            output_datasets = sum(
+                1
+                for dataset in dataset_lineage.values()
+                if dataset.get("output_paths")
+            )
+
+            metric_1, metric_2, metric_3, metric_4 = (
+                st.columns(4)
+            )
+
+            with metric_1:
+                st.metric(
+                    "Total datasets",
+                    total_datasets,
+                )
+
+            with metric_2:
+                st.metric(
+                    "Source datasets",
+                    source_datasets,
+                )
+
+            with metric_3:
+                st.metric(
+                    "Derived datasets",
+                    transformed_datasets,
+                )
+
+            with metric_4:
+                st.metric(
+                    "Written datasets",
+                    output_datasets,
+                )
+
+            st.divider()
+
+            selected_dataset = st.selectbox(
+                "Select dataset",
+                options=dataset_names,
+            )
+
+            lineage_record = dataset_lineage[
+                selected_dataset
+            ]
+
+            detail_column, relation_column = (
+                st.columns([1, 1])
+            )
+
+            with detail_column:
+                st.markdown(
+                    f"### {selected_dataset}"
+                )
+
+                producer_type = (
+                    lineage_record.get(
+                        "producer_type"
+                    )
+                    or "Unknown"
+                )
+
+                producer_step = (
+                    lineage_record.get(
+                        "producer_step"
+                    )
+                )
+
+                st.write(
+                    f"**Created by:** {producer_type}"
+                )
+
+                if producer_step is not None:
+                    st.write(
+                        f"**Producer step:** "
+                        f"{producer_step}"
+                    )
+
+                input_path = lineage_record.get(
+                    "input_path",
+                    "",
+                )
+
+                if input_path:
+                    st.write(
+                        f"**Input path:** `{input_path}`"
+                    )
+
+                output_paths = lineage_record.get(
+                    "output_paths",
+                    [],
+                )
+
+                if output_paths:
+                    st.write("**Output paths:**")
+
+                    for output_path in output_paths:
+                        st.code(
+                            output_path,
+                            language="text",
+                        )
+
+            with relation_column:
+                st.markdown(
+                    "### Relationships"
+                )
+
+                source_datasets = (
+                    lineage_record.get(
+                        "source_datasets",
+                        [],
+                    )
+                )
+
+                if source_datasets:
+                    st.write("**Upstream datasets:**")
+
+                    for source_dataset in source_datasets:
+                        st.write(
+                            f"⬆️ `{source_dataset}`"
+                        )
+                else:
+                    st.write(
+                        "**Upstream datasets:** None"
+                    )
+
+                consumers = lineage_record.get(
+                    "consumers",
+                    [],
+                )
+
+                if consumers:
+                    st.write(
+                        "**Downstream consumers:**"
+                    )
+
+                    for consumer in consumers:
+                        consumer_type = consumer.get(
+                            "component_type",
+                            "Unknown",
+                        )
+
+                        consumer_step = consumer.get(
+                            "step",
+                            "?",
+                        )
+
+                        output_dataset = consumer.get(
+                            "output_dataset",
+                            "",
+                        )
+
+                        output_path = consumer.get(
+                            "output_path",
+                            "",
+                        )
+
+                        consumer_text = (
+                            f"Step {consumer_step}: "
+                            f"{consumer_type}"
+                        )
+
+                        if output_dataset:
+                            consumer_text += (
+                                f" → {output_dataset}"
+                            )
+
+                        if output_path:
+                            consumer_text += (
+                                f" → {output_path}"
+                            )
+
+                        st.write(
+                            f"⬇️ {consumer_text}"
+                        )
+
+                else:
+                    st.write(
+                        "**Downstream consumers:** None"
+                    )
+
+            st.divider()
+
+            st.markdown("### Dataset schema")
+
+            schema = lineage_record.get(
+                "schema",
+                [],
+            )
+
+            if schema:
+                st.dataframe(
+                    schema,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "name": st.column_config.TextColumn(
+                            "Column"
+                        ),
+                        "type": st.column_config.TextColumn(
+                            "Data type"
+                        ),
+                    },
+                )
+            else:
+                st.info(
+                    "Schema information is not available "
+                    "for this dataset."
+                )
+
+            st.divider()
+
+            st.markdown("### Complete lineage inventory")
+
+            lineage_rows: list[dict[str, Any]] = []
+
+            for dataset_name in dataset_names:
+                record = dataset_lineage[
+                    dataset_name
+                ]
+
+                lineage_rows.append(
+                    {
+                        "Dataset": dataset_name,
+                        "Created by": (
+                            record.get(
+                                "producer_type"
+                            )
+                            or "Unknown"
+                        ),
+                        "Producer step": (
+                            record.get(
+                                "producer_step"
+                            )
+                        ),
+                        "Upstream datasets": ", ".join(
+                            record.get(
+                                "source_datasets",
+                                [],
+                            )
+                        ),
+                        "Consumer count": len(
+                            record.get(
+                                "consumers",
+                                [],
+                            )
+                        ),
+                        "Column count": len(
+                            record.get(
+                                "schema",
+                                [],
+                            )
+                        ),
+                        "Written": (
+                            "Yes"
+                            if record.get(
+                                "output_paths"
+                            )
+                            else "No"
+                        ),
+                    }
+                )
+
+            st.dataframe(
+                lineage_rows,
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            st.download_button(
+                label="Download lineage JSON",
+                data=json.dumps(
+                    dataset_lineage,
+                    indent=2,
+                ),
+                file_name=(
+                    f"{sanitize_filename(st.session_state.job_name)}"
+                    "_dataset_lineage.json"
+                ),
+                mime="application/json",
+                use_container_width=True,
+            )
+            
 with script_tab:
     if st.session_state.generated_script:
         st.code(
