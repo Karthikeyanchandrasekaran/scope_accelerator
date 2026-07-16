@@ -301,12 +301,16 @@ def render_component_editor(
 
             elif component_type == "Join":
                 st.markdown("#### Left source")
-
-                left_type = config.get(
+            
+                available_datasets = (
+                    get_available_datasets()
+                )
+            
+                left_source_type = config.get(
                     "left_source_type",
                     "Dataset",
                 )
-
+            
                 updated_config[
                     "left_source_type"
                 ] = st.selectbox(
@@ -314,29 +318,59 @@ def render_component_editor(
                     JOIN_SOURCE_TYPES,
                     index=(
                         JOIN_SOURCE_TYPES.index(
-                            left_type
+                            left_source_type
                         )
-                        if left_type
+                        if left_source_type
                         in JOIN_SOURCE_TYPES
                         else 0
                     ),
+                    key=f"left_source_type_{component_id}",
                 )
-
+            
+                left_columns: list[str] = []
+            
                 if (
-                    updated_config[
-                        "left_source_type"
-                    ]
+                    updated_config["left_source_type"]
                     == "Dataset"
                 ):
+                    current_left_dataset = config.get(
+                        "left_dataset",
+                        "",
+                    )
+            
+                    if (
+                        current_left_dataset
+                        not in available_datasets
+                        and available_datasets
+                    ):
+                        current_left_dataset = (
+                            available_datasets[0]
+                        )
+            
                     updated_config[
                         "left_dataset"
-                    ] = st.text_input(
+                    ] = st.selectbox(
                         "Left dataset",
-                        value=config.get(
-                            "left_dataset",
-                            "",
+                        options=(
+                            available_datasets
+                            if available_datasets
+                            else [""]
                         ),
-                    ).strip()
+                        index=(
+                            available_datasets.index(
+                                current_left_dataset
+                            )
+                            if current_left_dataset
+                            in available_datasets
+                            else 0
+                        ),
+                        key=f"left_dataset_{component_id}",
+                    )
+            
+                    left_columns = get_dataset_columns(
+                        updated_config["left_dataset"]
+                    )
+            
                 else:
                     updated_config[
                         "left_subquery"
@@ -347,8 +381,37 @@ def render_component_editor(
                             "",
                         ),
                         height=180,
+                        key=f"left_subquery_{component_id}",
                     )
-
+            
+                    left_subquery_columns_text = (
+                        st.text_input(
+                            "Left subquery output columns",
+                            value=", ".join(
+                                config.get(
+                                    "left_subquery_columns",
+                                    [],
+                                )
+                            ),
+                            help=(
+                                "Enter the columns returned by "
+                                "the subquery."
+                            ),
+                            key=(
+                                f"left_subquery_columns_"
+                                f"{component_id}"
+                            ),
+                        )
+                    )
+            
+                    left_columns = parse_csv(
+                        left_subquery_columns_text
+                    )
+            
+                    updated_config[
+                        "left_subquery_columns"
+                    ] = left_columns
+            
                 updated_config[
                     "left_alias"
                 ] = st.text_input(
@@ -357,15 +420,16 @@ def render_component_editor(
                         "left_alias",
                         "left_data",
                     ),
+                    key=f"left_alias_{component_id}",
                 ).strip()
-
+            
                 st.markdown("#### Right source")
-
-                right_type = config.get(
+            
+                right_source_type = config.get(
                     "right_source_type",
                     "Dataset",
                 )
-
+            
                 updated_config[
                     "right_source_type"
                 ] = st.selectbox(
@@ -373,29 +437,59 @@ def render_component_editor(
                     JOIN_SOURCE_TYPES,
                     index=(
                         JOIN_SOURCE_TYPES.index(
-                            right_type
+                            right_source_type
                         )
-                        if right_type
+                        if right_source_type
                         in JOIN_SOURCE_TYPES
                         else 0
                     ),
+                    key=f"right_source_type_{component_id}",
                 )
-
+            
+                right_columns: list[str] = []
+            
                 if (
-                    updated_config[
-                        "right_source_type"
-                    ]
+                    updated_config["right_source_type"]
                     == "Dataset"
                 ):
+                    current_right_dataset = config.get(
+                        "right_dataset",
+                        "",
+                    )
+            
+                    if (
+                        current_right_dataset
+                        not in available_datasets
+                        and available_datasets
+                    ):
+                        current_right_dataset = (
+                            available_datasets[-1]
+                        )
+            
                     updated_config[
                         "right_dataset"
-                    ] = st.text_input(
+                    ] = st.selectbox(
                         "Right dataset",
-                        value=config.get(
-                            "right_dataset",
-                            "",
+                        options=(
+                            available_datasets
+                            if available_datasets
+                            else [""]
                         ),
-                    ).strip()
+                        index=(
+                            available_datasets.index(
+                                current_right_dataset
+                            )
+                            if current_right_dataset
+                            in available_datasets
+                            else 0
+                        ),
+                        key=f"right_dataset_{component_id}",
+                    )
+            
+                    right_columns = get_dataset_columns(
+                        updated_config["right_dataset"]
+                    )
+            
                 else:
                     updated_config[
                         "right_subquery"
@@ -406,8 +500,37 @@ def render_component_editor(
                             "",
                         ),
                         height=180,
+                        key=f"right_subquery_{component_id}",
                     )
-
+            
+                    right_subquery_columns_text = (
+                        st.text_input(
+                            "Right subquery output columns",
+                            value=", ".join(
+                                config.get(
+                                    "right_subquery_columns",
+                                    [],
+                                )
+                            ),
+                            help=(
+                                "Enter the columns returned by "
+                                "the subquery."
+                            ),
+                            key=(
+                                f"right_subquery_columns_"
+                                f"{component_id}"
+                            ),
+                        )
+                    )
+            
+                    right_columns = parse_csv(
+                        right_subquery_columns_text
+                    )
+            
+                    updated_config[
+                        "right_subquery_columns"
+                    ] = right_columns
+            
                 updated_config[
                     "right_alias"
                 ] = st.text_input(
@@ -416,13 +539,14 @@ def render_component_editor(
                         "right_alias",
                         "right_data",
                     ),
+                    key=f"right_alias_{component_id}",
                 ).strip()
-
+            
                 current_join_type = config.get(
                     "join_type",
                     "INNER",
                 )
-
+            
                 updated_config[
                     "join_type"
                 ] = st.selectbox(
@@ -436,8 +560,9 @@ def render_component_editor(
                         in JOIN_TYPES
                         else 0
                     ),
+                    key=f"join_type_{component_id}",
                 )
-
+            
                 updated_config[
                     "join_condition"
                 ] = st.text_area(
@@ -446,19 +571,69 @@ def render_component_editor(
                         "join_condition",
                         "",
                     ),
+                    key=f"join_condition_{component_id}",
                 ).strip()
-
+            
+                left_alias = updated_config[
+                    "left_alias"
+                ]
+            
+                right_alias = updated_config[
+                    "right_alias"
+                ]
+            
+                selectable_columns = [
+                    f"{left_alias}.{column}"
+                    for column in left_columns
+                ] + [
+                    f"{right_alias}.{column}"
+                    for column in right_columns
+                ]
+            
+                previously_selected = config.get(
+                    "selected_columns",
+                    [],
+                )
+            
+                if isinstance(
+                    previously_selected,
+                    str,
+                ):
+                    previously_selected = parse_csv(
+                        previously_selected.replace(
+                            "\n",
+                            ",",
+                        )
+                    )
+            
+                valid_defaults = [
+                    column
+                    for column in previously_selected
+                    if column in selectable_columns
+                ]
+            
+                selected_columns = st.multiselect(
+                    "Columns to include after join",
+                    options=selectable_columns,
+                    default=valid_defaults,
+                    help=(
+                        "Columns are derived from the schemas "
+                        "of the selected datasets."
+                    ),
+                    key=f"join_selected_columns_{component_id}",
+                )
+            
                 updated_config[
                     "selected_columns"
-                ] = st.text_area(
-                    "Selected columns",
-                    value=config.get(
-                        "selected_columns",
-                        "",
-                    ),
-                    height=150,
-                )
-
+                ] = selected_columns
+            
+                updated_config[
+                    "selected_column_names"
+                ] = [
+                    column.split(".", maxsplit=1)[-1]
+                    for column in selected_columns
+                ]
+            
                 updated_config[
                     "output_dataset"
                 ] = st.text_input(
@@ -467,8 +642,8 @@ def render_component_editor(
                         "output_dataset",
                         "joined_data",
                     ),
+                    key=f"join_output_{component_id}",
                 ).strip()
-
             elif component_type == "Filter":
                 updated_config[
                     "source_dataset"
