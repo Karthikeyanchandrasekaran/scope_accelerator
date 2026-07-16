@@ -80,6 +80,10 @@ WORKFLOW_TEMPLATES = {
                         "FROM product_data\n"
                         "WHERE IsActive == true"
                     ),
+                    "right_subquery_columns": [
+                        "ProductId",
+                        "ProductName",
+                    ],
                     "right_alias": "product",
 
                     "join_type": "LEFT OUTER",
@@ -87,11 +91,16 @@ WORKFLOW_TEMPLATES = {
                         "customer.ProductId == "
                         "product.ProductId"
                     ),
-                    "selected_columns": (
-                        "customer.CustomerId,\n"
-                        "customer.ProductId,\n"
-                        "product.ProductName"
-                    ),
+                    "selected_columns": [
+                        "customer.CustomerId",
+                        "customer.ProductId",
+                        "product.ProductName",
+                    ],
+                    "selected_column_names": [
+                        "CustomerId",
+                        "ProductId",
+                        "ProductName",
+                    ],
                     "output_dataset": "joined_data",
                 },
             },
