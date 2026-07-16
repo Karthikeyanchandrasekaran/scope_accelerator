@@ -20,12 +20,13 @@ from workflow import (
     delete_component,
     export_workflow,
     get_available_datasets,
+    get_dataset_columns,
+    get_dataset_schemas,
     initialize_state,
     load_workflow,
     move_component,
     update_component,
 )
-
 
 st.set_page_config(
     page_title="SCOPE Engineering Studio",
