@@ -2040,6 +2040,162 @@ def build_dataset_lineage(
                     ].append(output_path)
 
     return lineage
+def normalize_schema(
+    schema: list[dict[str, Any]],
+) -> list[dict[str, str]]:
+    """
+    Standardize schema records for display and comparison.
+    """
+    normalized: list[dict[str, str]] = []
+    seen_columns: set[str] = set()
+
+    for column in schema:
+        if not isinstance(column, dict):
+            continue
+
+        column_name = str(
+            column.get("name", "")
+        ).strip()
+
+        column_type = str(
+            column.get("type", "Unknown")
+        ).strip() or "Unknown"
+
+        if not column_name:
+            continue
+
+        if column_name in seen_columns:
+            continue
+
+        seen_columns.add(column_name)
+
+        normalized.append(
+            {
+                "name": column_name,
+                "type": column_type,
+            }
+        )
+
+    return normalized
+
+
+def build_schema_inventory(
+    components: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """
+    Build a schema inventory using dataset lineage.
+    """
+    lineage = build_dataset_lineage(
+        components
+    )
+
+    inventory: dict[str, dict[str, Any]] = {}
+
+    for dataset_name, record in lineage.items():
+        schema = normalize_schema(
+            record.get("schema", [])
+        )
+
+        inventory[dataset_name] = {
+            "dataset_name": dataset_name,
+            "schema": schema,
+            "column_count": len(schema),
+            "producer_type": (
+                record.get("producer_type")
+                or "Unknown"
+            ),
+            "producer_step": record.get(
+                "producer_step"
+            ),
+            "source_datasets": record.get(
+                "source_datasets",
+                [],
+            ),
+            "input_path": record.get(
+                "input_path",
+                "",
+            ),
+            "output_paths": record.get(
+                "output_paths",
+                [],
+            ),
+        }
+
+    return inventory
+
+
+def compare_dataset_schemas(
+    left_schema: list[dict[str, str]],
+    right_schema: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    """
+    Compare columns and data types between two datasets.
+    """
+    left_columns = {
+        column["name"]: column.get(
+            "type",
+            "Unknown",
+        )
+        for column in normalize_schema(
+            left_schema
+        )
+    }
+
+    right_columns = {
+        column["name"]: column.get(
+            "type",
+            "Unknown",
+        )
+        for column in normalize_schema(
+            right_schema
+        )
+    }
+
+    all_columns = sorted(
+        set(left_columns)
+        | set(right_columns)
+    )
+
+    comparison_rows: list[dict[str, str]] = []
+
+    for column_name in all_columns:
+        left_type = left_columns.get(
+            column_name
+        )
+
+        right_type = right_columns.get(
+            column_name
+        )
+
+        if (
+            left_type is not None
+            and right_type is not None
+        ):
+            if left_type == right_type:
+                status = "Matching"
+            else:
+                status = "Type mismatch"
+
+        elif left_type is not None:
+            status = "Left only"
+
+        else:
+            status = "Right only"
+
+        comparison_rows.append(
+            {
+                "Column": column_name,
+                "Left type": (
+                    left_type or "—"
+                ),
+                "Right type": (
+                    right_type or "—"
+                ),
+                "Status": status,
+            }
+        )
+
+    return comparison_rows
 with st.sidebar:
     
     st.title("SCOPE Studio")
@@ -2182,6 +2338,7 @@ with environment_column:
     workflow_tab,
     data_flow_tab,
     lineage_tab,
+    schema_tab,
     script_tab,
     json_tab,
 ) = st.tabs(
@@ -2189,6 +2346,7 @@ with environment_column:
         "Workflow",
         "Data Flow",
         "Dataset Lineage",
+        "Schema Explorer",
         "Generated SCOPE",
         "Workflow JSON",
     ]
@@ -2689,7 +2847,549 @@ with lineage_tab:
                 mime="application/json",
                 use_container_width=True,
             )
-            
+
+with schema_tab:
+    st.subheader("Schema Explorer")
+
+    st.caption(
+        "Browse propagated dataset schemas and compare "
+        "columns across workflow datasets."
+    )
+
+    if not st.session_state.components:
+        st.info(
+            "Load a workflow or add components to "
+            "explore dataset schemas."
+        )
+
+    else:
+        schema_inventory = build_schema_inventory(
+            st.session_state.components
+        )
+
+        dataset_names = sorted(
+            schema_inventory.keys()
+        )
+
+        datasets_with_schema = [
+            dataset_name
+            for dataset_name in dataset_names
+            if schema_inventory[
+                dataset_name
+            ]["schema"]
+        ]
+
+        total_columns = sum(
+            record["column_count"]
+            for record
+            in schema_inventory.values()
+        )
+
+        unknown_type_columns = sum(
+            1
+            for record
+            in schema_inventory.values()
+            for column
+            in record["schema"]
+            if column.get(
+                "type",
+                "Unknown",
+            ) in {
+                "",
+                "Unknown",
+                "Derived",
+            }
+        )
+
+        metric_1, metric_2, metric_3, metric_4 = (
+            st.columns(4)
+        )
+
+        with metric_1:
+            st.metric(
+                "Datasets",
+                len(dataset_names),
+            )
+
+        with metric_2:
+            st.metric(
+                "Datasets with schema",
+                len(datasets_with_schema),
+            )
+
+        with metric_3:
+            st.metric(
+                "Total columns",
+                total_columns,
+            )
+
+        with metric_4:
+            st.metric(
+                "Unknown/derived types",
+                unknown_type_columns,
+            )
+
+        st.divider()
+
+        browse_tab, compare_tab, inventory_tab = (
+            st.tabs(
+                [
+                    "Browse Schema",
+                    "Compare Schemas",
+                    "Schema Inventory",
+                ]
+            )
+        )
+
+        # ====================================================
+        # BROWSE DATASET SCHEMA
+        # ====================================================
+
+        with browse_tab:
+            if not dataset_names:
+                st.info(
+                    "No datasets were found."
+                )
+
+            else:
+                selected_dataset = st.selectbox(
+                    "Select dataset",
+                    options=dataset_names,
+                    key="schema_selected_dataset",
+                )
+
+                selected_record = (
+                    schema_inventory[
+                        selected_dataset
+                    ]
+                )
+
+                detail_1, detail_2, detail_3 = (
+                    st.columns(3)
+                )
+
+                with detail_1:
+                    st.write(
+                        "**Created by**"
+                    )
+
+                    st.write(
+                        selected_record[
+                            "producer_type"
+                        ]
+                    )
+
+                with detail_2:
+                    st.write(
+                        "**Producer step**"
+                    )
+
+                    producer_step = (
+                        selected_record[
+                            "producer_step"
+                        ]
+                    )
+
+                    st.write(
+                        producer_step
+                        if producer_step
+                        is not None
+                        else "N/A"
+                    )
+
+                with detail_3:
+                    st.write(
+                        "**Column count**"
+                    )
+
+                    st.write(
+                        selected_record[
+                            "column_count"
+                        ]
+                    )
+
+                source_datasets = (
+                    selected_record[
+                        "source_datasets"
+                    ]
+                )
+
+                if source_datasets:
+                    st.write(
+                        "**Upstream datasets:** "
+                        + ", ".join(
+                            source_datasets
+                        )
+                    )
+
+                input_path = selected_record[
+                    "input_path"
+                ]
+
+                if input_path:
+                    st.write(
+                        "**Input path:**"
+                    )
+
+                    st.code(
+                        input_path,
+                        language="text",
+                    )
+
+                output_paths = selected_record[
+                    "output_paths"
+                ]
+
+                if output_paths:
+                    st.write(
+                        "**Output paths:**"
+                    )
+
+                    for output_path in output_paths:
+                        st.code(
+                            output_path,
+                            language="text",
+                        )
+
+                search_text = st.text_input(
+                    "Search columns",
+                    placeholder=(
+                        "Enter column name or data type"
+                    ),
+                    key="schema_column_search",
+                )
+
+                schema_rows = selected_record[
+                    "schema"
+                ]
+
+                if search_text.strip():
+                    search_value = (
+                        search_text
+                        .strip()
+                        .lower()
+                    )
+
+                    schema_rows = [
+                        column
+                        for column in schema_rows
+                        if (
+                            search_value
+                            in column.get(
+                                "name",
+                                "",
+                            ).lower()
+                            or search_value
+                            in column.get(
+                                "type",
+                                "",
+                            ).lower()
+                        )
+                    ]
+
+                if schema_rows:
+                    display_rows = [
+                        {
+                            "Position": index,
+                            "Column": column[
+                                "name"
+                            ],
+                            "Data type": column[
+                                "type"
+                            ],
+                        }
+                        for index, column
+                        in enumerate(
+                            schema_rows,
+                            start=1,
+                        )
+                    ]
+
+                    st.dataframe(
+                        display_rows,
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
+                    st.download_button(
+                        label=(
+                            "Download selected "
+                            "dataset schema"
+                        ),
+                        data=json.dumps(
+                            {
+                                "dataset_name": (
+                                    selected_dataset
+                                ),
+                                "producer_type": (
+                                    selected_record[
+                                        "producer_type"
+                                    ]
+                                ),
+                                "schema": (
+                                    selected_record[
+                                        "schema"
+                                    ]
+                                ),
+                            },
+                            indent=2,
+                        ),
+                        file_name=(
+                            f"{sanitize_filename(selected_dataset)}"
+                            "_schema.json"
+                        ),
+                        mime="application/json",
+                        use_container_width=True,
+                    )
+
+                else:
+                    st.info(
+                        "No matching columns were found, "
+                        "or schema metadata is unavailable."
+                    )
+
+        # ====================================================
+        # COMPARE TWO DATASET SCHEMAS
+        # ====================================================
+
+        with compare_tab:
+            if len(dataset_names) < 2:
+                st.info(
+                    "At least two datasets are required "
+                    "for schema comparison."
+                )
+
+            else:
+                compare_column_1, compare_column_2 = (
+                    st.columns(2)
+                )
+
+                with compare_column_1:
+                    left_dataset = st.selectbox(
+                        "Left dataset",
+                        options=dataset_names,
+                        key="schema_compare_left",
+                    )
+
+                right_default_index = (
+                    1
+                    if len(dataset_names) > 1
+                    else 0
+                )
+
+                with compare_column_2:
+                    right_dataset = st.selectbox(
+                        "Right dataset",
+                        options=dataset_names,
+                        index=right_default_index,
+                        key="schema_compare_right",
+                    )
+
+                left_schema = schema_inventory[
+                    left_dataset
+                ]["schema"]
+
+                right_schema = schema_inventory[
+                    right_dataset
+                ]["schema"]
+
+                comparison_rows = (
+                    compare_dataset_schemas(
+                        left_schema,
+                        right_schema,
+                    )
+                )
+
+                matching_count = sum(
+                    1
+                    for row in comparison_rows
+                    if row["Status"]
+                    == "Matching"
+                )
+
+                mismatch_count = sum(
+                    1
+                    for row in comparison_rows
+                    if row["Status"]
+                    == "Type mismatch"
+                )
+
+                left_only_count = sum(
+                    1
+                    for row in comparison_rows
+                    if row["Status"]
+                    == "Left only"
+                )
+
+                right_only_count = sum(
+                    1
+                    for row in comparison_rows
+                    if row["Status"]
+                    == "Right only"
+                )
+
+                comparison_metric_1, \
+                comparison_metric_2, \
+                comparison_metric_3, \
+                comparison_metric_4 = st.columns(4)
+
+                with comparison_metric_1:
+                    st.metric(
+                        "Matching",
+                        matching_count,
+                    )
+
+                with comparison_metric_2:
+                    st.metric(
+                        "Type mismatches",
+                        mismatch_count,
+                    )
+
+                with comparison_metric_3:
+                    st.metric(
+                        "Left only",
+                        left_only_count,
+                    )
+
+                with comparison_metric_4:
+                    st.metric(
+                        "Right only",
+                        right_only_count,
+                    )
+
+                status_filter = st.multiselect(
+                    "Filter comparison status",
+                    options=[
+                        "Matching",
+                        "Type mismatch",
+                        "Left only",
+                        "Right only",
+                    ],
+                    default=[
+                        "Matching",
+                        "Type mismatch",
+                        "Left only",
+                        "Right only",
+                    ],
+                    key=(
+                        "schema_comparison_"
+                        "status_filter"
+                    ),
+                )
+
+                filtered_comparison_rows = [
+                    row
+                    for row in comparison_rows
+                    if row["Status"]
+                    in status_filter
+                ]
+
+                st.dataframe(
+                    filtered_comparison_rows,
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+                st.download_button(
+                    label=(
+                        "Download schema comparison"
+                    ),
+                    data=json.dumps(
+                        {
+                            "left_dataset": (
+                                left_dataset
+                            ),
+                            "right_dataset": (
+                                right_dataset
+                            ),
+                            "comparison": (
+                                comparison_rows
+                            ),
+                        },
+                        indent=2,
+                    ),
+                    file_name=(
+                        f"{sanitize_filename(left_dataset)}"
+                        "_vs_"
+                        f"{sanitize_filename(right_dataset)}"
+                        "_schema_comparison.json"
+                    ),
+                    mime="application/json",
+                    use_container_width=True,
+                )
+
+        # ====================================================
+        # COMPLETE SCHEMA INVENTORY
+        # ====================================================
+
+        with inventory_tab:
+            inventory_rows: list[
+                dict[str, Any]
+            ] = []
+
+            for dataset_name in dataset_names:
+                record = schema_inventory[
+                    dataset_name
+                ]
+
+                inventory_rows.append(
+                    {
+                        "Dataset": dataset_name,
+                        "Producer": record[
+                            "producer_type"
+                        ],
+                        "Producer step": record[
+                            "producer_step"
+                        ],
+                        "Column count": record[
+                            "column_count"
+                        ],
+                        "Upstream datasets": (
+                            ", ".join(
+                                record[
+                                    "source_datasets"
+                                ]
+                            )
+                        ),
+                        "Has input path": (
+                            "Yes"
+                            if record[
+                                "input_path"
+                            ]
+                            else "No"
+                        ),
+                        "Written to output": (
+                            "Yes"
+                            if record[
+                                "output_paths"
+                            ]
+                            else "No"
+                        ),
+                    }
+                )
+
+            st.dataframe(
+                inventory_rows,
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            st.download_button(
+                label=(
+                    "Download complete "
+                    "schema inventory"
+                ),
+                data=json.dumps(
+                    schema_inventory,
+                    indent=2,
+                ),
+                file_name=(
+                    f"{sanitize_filename(st.session_state.job_name)}"
+                    "_schema_inventory.json"
+                ),
+                mime="application/json",
+                use_container_width=True,
+            )
 with script_tab:
     if st.session_state.generated_script:
         st.code(
